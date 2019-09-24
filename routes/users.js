@@ -1,6 +1,15 @@
 
 var express  = require('express');
 
+//암호화 모듈 추가
+const bcrypt = require('bcrypt');
+
+//jwt 모듈 추가
+const jwt = require('jsonwebtoken');
+
+//JWT 토큰 유효성 검사 미들웨어 기능 추가
+const { verifyToken } = require('./middlewares.js');
+
 //라우터에서 사용하고자 하는 모델 객체를 조회한다.
 var User = require('../models/index.js').User;
 
@@ -52,31 +61,192 @@ router.get('/',function(req,res,next){
 
 });
 
+//회원가입 처리 메소드
+router.post('/regist',async(req,res) =>{
 
-//단일 데이터(사용자) 정보조회 샘플
-//http://localhost/users/1 URL호출시 작동
-router.get('/:id',(req,res,next) => {
-  
-  //시퀄라이즈 4.x대에 find 메소드가 5.x버전에서 없어지고
-  //5.x버전에서는 findOne메소드를 사용합니다.
-  //특정컬럼만 가지고오고싶으면 attributes속성에 컬럼을 지정합니다.
-  //조건 필터링 조회하고자 하면 where속성에 여러개조합(And)으로 컬럼명과 값을 추가한다.
-  User.findOne({
-    attributes:['email','nickname','entrytype','username'],
-    where:{
-      id:req.params.id,
-      usertype:'u'
+  try{
+
+    //Step1: 동일 이메일 계정 존재여부 체크 
+
+    //동일 이메일 주소 사용자 정보 조회
+    const existUser = await User.findOne({
+      // where:{(디비)email:(클라이언트)req.body.email}
+      where:{email:req.body.email}
+    });
+    //동일 사용자 주소 존재시 체크
+    if(existUser) {
+      console.log("이미 가입된 메일주소입니다.");
+
+      //서버에서 에러가 난것처럼 위장 하여 결과메시지를 클라이언트에 전송 실제로 에러는 나지 않음. 
+      return res.json({
+        code:500,
+        message:'이미 가입된 메일주소입니다.'
+        }
+      );
     }
-  })
-  .then((user) => {
-    res.json(user);
-  })
-  .catch((err) => {
-    console.log(err);
-    next(err);
-  })
+    else{
+      //클라이언트에서 보내준 데이터로 회원등록 처리
+      // 해시알고리즘은 복호화가 불가능
+      //Step1: 사용자 암호 단방향 암호화 문자열 생성  sha 256 쓰고 싶은면 56이라고 쓰면 됨 지금은 512니깐 12
+      const hash = await bcrypt.hash(req.body.userpwd,12);
 
+    //Step2: 신규 회원정보 등록처리
+    const newUser = await User.create({
+      email:req.body.email,
+      userpwd:hash,
+      nickname:req.body.username,
+      entrytype:'local',
+      snsid:'',
+      username:req.body.username,
+      telephone:'',
+      photo:'sample.png',
+      lastip:'127.0.0.1',
+      usertype:'u',
+      userstate:'a'
+      
+    })
+  return res.json({ code:200, result:newUser});
+}
+
+  
+  }catch(err){
+    console.log(err);
+    return res.status(500).json({ code:500,message:'서버에러발생'});
+  }
 });
+
+//회원 로그인 처리 : 일반형 (클라이언트에서 id pwd만 맞는지 확인하는)
+router.post('/login',async(req,res) =>{
+
+  try{
+
+    //Step1: 동일 이메일 계정 존재여부 체크 
+
+    //동일 이메일 주소 사용자 정보 조회
+    const existUser = await User.findOne({
+      // where:{(디비)email:(클라이언트)req.body.email}
+      where:{email:req.body.email}
+    });
+    //동일 사용자 주소 존재시 로그인처리
+    if(existUser) {
+
+      //Step1: 사용자 입력 암호와 DB상에 암호화딘 암호를 비교한다.
+      const result = await bcrypt.compare(req.body.userpwd,existUser.userpwd);
+
+      //Step2: 암호 비교 결과에 따른 메시지 분기 처리
+
+      if(result){
+        //암호가 같은경우
+        return res.json({ code:200, result:existUser});
+      }
+      else{
+        //암호가 틀린경우 에러 메시지 발생 전달
+        return res.json({ code:500, message:'암호가 일치하지 않습니다.'});
+      }
+    }
+    else
+    {
+      //동일 사용자 정보가 존재하지 않은 경우
+      //로그인 계정이 없음 에러발생 메시지 처리
+
+       return res.json({ code:500, message:'동일한 메일 계정이 존재하지 않습니다.'});
+    }
+
+  
+  }catch(err){
+    console.log(err);
+    return res.status(500).json({ code:500,message:'서버에러발생'});
+  }
+});
+
+
+
+//회원 로그인 처리 : 토큰형 
+router.post('/tlogin',async(req,res) =>{
+
+  try{
+
+    //Step1: 동일 이메일 계정 존재여부 체크 
+
+    //동일 이메일 주소 사용자 정보 조회
+    const existUser = await User.findOne({
+      // where:{(디비)email:(클라이언트)req.body.email}
+      where:{email:req.body.email}
+    });
+    //동일 사용자 주소 존재시 로그인처리
+    if(existUser) {
+
+      //Step1: 사용자 입력 암호와 DB상에 암호화딘 암호를 비교한다.
+      const result = await bcrypt.compare(req.body.userpwd,existUser.userpwd);
+
+      //Step2: 암호 비교 결과에 따른 메시지 분기 처리
+
+      if(result){
+        //암호가 같은경우
+        //return res.json({ code:200, result:existUser});
+
+        //JWT 인증 토큰을 생성 후 브라우저에 전달
+        //jwt.sign('사용자 정보 저장 페이로드','jwt인증키','기타설정(파기일자')
+        const token = jwt.sign({
+          id:existUser.id,
+          email:existUser.email,
+          username:existUser.username
+        },process.env.JWT_SECRET,{
+          expiresIn:'1m',//1분
+          issuer:'webzineadmin'
+        });
+        return res.json({ code:200, result:token});
+      }
+      else{
+        //암호가 틀린경우 에러 메시지 발생 전달
+        return res.json({ code:500, message:'암호가 일치하지 않습니다.'});
+      }
+    }
+    else
+    {
+      //동일 사용자 정보가 존재하지 않은 경우
+      //로그인 계정이 없음 에러발생 메시지 처리
+
+       return res.json({ code:500, message:'동일한 메일 계정이 존재하지 않습니다.'});
+    }
+
+  
+  }catch(err){
+    console.log(err);
+    return res.status(500).json({ code:500,message:'서버에러발생'});
+  }
+});
+
+//회원 프로파일 정보 조회
+//회원 프로파일 open api가 호출되면 미들웨어 모듈의
+//토큰 유효성 검사 공통모듈을 먼저 수행하고 내부 데이터 조회
+//기능이 수행된다.
+router.get('/profile',verifyToken, async(req,res) =>{
+
+//미들 웨어 정상 토큰 유효성 검사 후 req.decoded에 저장된
+//사용자 정보를 tokenUserData변수에 저장한다.
+// var tokenUserData = req.decoded;
+  var loginUserEmail = req.decoded.email;
+  var loginUserId = req.decoded.id;
+  var loginUserName = req.decoded.name;
+try{ const myData = await User.findOne({
+  where:{email:loginUserEmail}
+});
+ 
+
+  return res.json({
+    code:200,
+    result:myData
+  })
+}catch(err){
+  return res.status(500).json({code:500, message:"서버에러발생!"})
+}
+});
+
+
+
+
+
 
 
 //신규 사용자 등록처리 api
@@ -158,3 +328,27 @@ router.delete('/:id',(req,res,next) => {
 
 //사용자 정보관리 전용 User라우터를 외부에 노출한다.
 module.exports = router;
+//단일 데이터(사용자) 정보조회 샘플
+//http://localhost/users/1 URL호출시 작동
+router.get('/:id',(req,res,next) => {
+  
+  //시퀄라이즈 4.x대에 find 메소드가 5.x버전에서 없어지고
+  //5.x버전에서는 findOne메소드를 사용합니다.
+  //특정컬럼만 가지고오고싶으면 attributes속성에 컬럼을 지정합니다.
+  //조건 필터링 조회하고자 하면 where속성에 여러개조합(And)으로 컬럼명과 값을 추가한다.
+  User.findOne({
+    attributes:['email','nickname','entrytype','username'],
+    where:{
+      id:req.params.id,
+      usertype:'u'
+    }
+  })
+  .then((user) => {
+    res.json(user);
+  })
+  .catch((err) => {
+    console.log(err);
+    next(err);
+  })
+
+});
